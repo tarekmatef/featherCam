@@ -1,0 +1,7 @@
+---
+defaults:
+  - tracker: wandb # loads config/tracker/wandb.yaml under cfg.tracker
+  - _self_
+
+# Global Configuration
+# seed: 42
