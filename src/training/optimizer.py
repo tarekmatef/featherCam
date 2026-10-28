@@ -1,9 +1,9 @@
-# src/training/optimizers.py
-from typing import Any, Iterable
+# src/training/optimizer.py
+from typing import Any, Dict, Union
+
 from omegaconf import DictConfig
-import torch
-import torch.nn as nn
-from torch.optim import SGD, Adam, AdamW, RMSprop, Optimizer
+from torch import nn
+from torch.optim import SGD, Adam, AdamW, Optimizer, RMSprop
 
 
 class OptimizerFactory:

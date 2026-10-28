@@ -6,3 +6,4 @@ defaults:
 
 # Global Configuration
 # seed: 42
+model_name: custom_cnn
