@@ -1,6 +1,7 @@
 ---
 defaults:
   - tracker: wandb # loads config/tracker/wandb.yaml under cfg.tracker
+  - training: training
   - _self_
 
 # Global Configuration
