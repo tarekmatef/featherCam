@@ -1,0 +1,6 @@
+---
+dataset: "cub200"
+data_dir: "data"
+image_size: 224
+num_workers: 4
+download: true

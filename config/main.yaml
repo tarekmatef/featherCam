@@ -2,6 +2,7 @@
 defaults:
   - tracker: wandb # loads config/tracker/wandb.yaml under cfg.tracker
   - training: training
+  - data: cub200
   - _self_
 
 # Global Configuration

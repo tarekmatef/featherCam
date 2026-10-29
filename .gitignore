@@ -222,3 +222,4 @@ __marimo__/
 .env
 outputs/*
 wandb
+/data/

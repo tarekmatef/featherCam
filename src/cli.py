@@ -5,13 +5,14 @@ from dotenv import load_dotenv
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import torch
-from torch.utils.data import DataLoader, TensorDataset
+import wandb
 
 # Ensure `src` root is on sys.path whether invoked as `python src/cli.py` or `python -m src.cli`
 _SRC_DIR = Path(__file__).resolve().parent
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
+from data.cub200 import create_dataloaders
 from models.factory import ModelFactory
 from training.optimizer import OptimizerFactory
 from training.trainer import train, validate
@@ -22,6 +23,7 @@ def review_config(cfg: DictConfig) -> None:
     run_mode = cfg.get("run_mode", "train")
     model_name = cfg.get("model_name", "custom_cnn")
     train_cfg = cfg.get("training", {})
+    data_cfg = cfg.get("data", {})
     tracker_cfg = cfg.get("tracker", {})
     default_device = "cuda" if torch.cuda.is_available() else "cpu"
     device = train_cfg.get("device", cfg.get("device", default_device))
@@ -33,6 +35,12 @@ def review_config(cfg: DictConfig) -> None:
     print(f"  Run Mode       : {run_mode}")
     print(f"  Model          : {model_name}")
     print(f"  Device         : {device}")
+    print("-" * 55)
+    print("  Dataset (CUB-200-2011):")
+    print(f"    Data Dir     : {data_cfg.get('data_dir', 'data')}")
+    print(f"    Image Size   : {data_cfg.get('image_size', 224)}")
+    print(f"    Num Workers  : {data_cfg.get('num_workers', 4)}")
+    print(f"    Auto-Download: {data_cfg.get('download', True)}")
     print("-" * 55)
     print("  Training Hyperparameters:")
     print(f"    Optimizer    : {train_cfg.get('optimizer', 'N/A')}")
@@ -59,22 +67,6 @@ def confirm_execution(prompt: str = "Proceed with this configuration? [y/N]: ") 
     return response in ("y", "yes")
 
 
-def _build_placeholder_loaders(cfg: DictConfig):
-    """Build synthetic DataLoaders until the dataset pipeline in `src/data` is wired."""
-    batch_size = int(cfg.training.get("batch_size", 32))
-    train_ds = TensorDataset(
-        torch.randn(batch_size * 2, 3, 224, 224),
-        torch.randint(0, 200, (batch_size * 2,)),
-    )
-    val_ds = TensorDataset(
-        torch.randn(batch_size, 3, 224, 224),
-        torch.randint(0, 200, (batch_size,)),
-    )
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
-    return train_loader, val_loader
-
-
 @hydra.main(version_base=None, config_path="../config", config_name="main")
 def feathercam(cfg: DictConfig):
     load_dotenv()
@@ -88,19 +80,27 @@ def feathercam(cfg: DictConfig):
 
     run_mode = str(cfg.get("run_mode", "train")).strip().lower()
     model = ModelFactory.create_model(cfg)
+    train_loader, val_loader = create_dataloaders(cfg)
 
     if run_mode == "train":
         opt = OptimizerFactory.create_optimizer(model=model, cfg=cfg.training)
-        train_loader, val_loader = _build_placeholder_loaders(cfg)
-        train(
-            model=model,
-            opt=opt,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            cfg=cfg,
+        wandb.init(
+            entity=cfg.tracker.get("entity"),
+            project=cfg.tracker.get("project"),
+            job_type=run_mode,
+            config=OmegaConf.to_container(cfg, resolve=True),
         )
+        try:
+            train(
+                model=model,
+                opt=opt,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                cfg=cfg,
+            )
+        finally:
+            wandb.finish()
     elif run_mode in ("val", "validate", "eval"):
-        _, val_loader = _build_placeholder_loaders(cfg)
         default_device = "cuda" if torch.cuda.is_available() else "cpu"
         device = torch.device(cfg.training.get("device", default_device))
         model.to(device)
