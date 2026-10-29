@@ -1,3 +1,5 @@
+from pathlib import Path
+import tempfile
 from typing import Any, Dict, Optional, Tuple, Union
 
 import torch
@@ -166,5 +168,59 @@ def train(
         if wandb is not None and getattr(wandb, "run", None) is not None:
             wandb.log(metrics, step=epoch)
 
+    if wandb is not None and getattr(wandb, "run", None) is not None:
+        model_name = str(cfg.get("model_name", "model")).strip().lower() if isinstance(cfg, (dict, DictConfig)) else "model"
+        artifact_name = f"{model_name}-weights"
+        save_model_to_wandb(model=model, artifact_name=artifact_name, metadata={"epochs": epochs, **metrics})
+
     return history
+
+
+def save_model_to_wandb(
+    model: nn.Module,
+    artifact_name: str = "model-weights",
+    filename: str = "model_weights.pt",
+    metadata: Optional[Dict[str, Any]] = None,
+):
+    """Save `model.state_dict()` and upload it as a W&B model artifact on the active run."""
+    if wandb is None or getattr(wandb, "run", None) is None:
+        raise RuntimeError("An active wandb.run is required to log model weights to W&B.")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        weight_path = Path(tmpdir) / filename
+        torch.save(model.state_dict(), weight_path)
+        artifact = wandb.Artifact(name=artifact_name, type="model", metadata=metadata or {})
+        artifact.add_file(str(weight_path), name=filename)
+        logged_artifact = wandb.run.log_artifact(artifact)
+        logged_artifact.wait()
+        return logged_artifact
+
+
+def load_model_from_wandb(
+    model: nn.Module,
+    artifact_ref: str,
+    filename: str = "model_weights.pt",
+    device: Union[str, torch.device] = "cpu",
+) -> nn.Module:
+    """
+    Download model weights from a W&B artifact and load them into `model`.
+
+    Args:
+        model: Uninitialized or freshly created nn.Module of matching architecture.
+        artifact_ref: Full W&B artifact path, e.g. 'entity/project/artifact_name:version'.
+        filename: Name of the weights file inside the artifact.
+        device: Device to map loaded tensors onto.
+    """
+    if wandb is None:
+        raise ImportError("wandb is not installed.")
+
+    api = wandb.Api()
+    artifact = api.artifact(artifact_ref, type="model")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        artifact_dir = Path(artifact.download(root=tmpdir))
+        state_dict = torch.load(artifact_dir / filename, map_location=device, weights_only=True)
+        model.load_state_dict(state_dict)
+    model.to(device)
+    return model
+
 
