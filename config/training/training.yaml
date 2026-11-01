@@ -6,3 +6,11 @@ betas: [0.9, 0.999]
 eps: 0.00000001
 epochs: 10
 batch_size: 32
+checkpoint_dir: "outputs/checkpoints"
+resume_from: null        # Path to checkpoint file or true to resume from latest_checkpoint.pt
+early_stopping:
+  enabled: true
+  monitor: "val_loss"    # Options: "val_loss", "val_acc"
+  patience: 5
+  min_delta: 0.0
+  restore_best_weights: true

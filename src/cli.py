@@ -52,6 +52,16 @@ def review_config(cfg: DictConfig) -> None:
     print(f"    Eps          : {train_cfg.get('eps', 'N/A')}")
     print(f"    Epochs       : {train_cfg.get('epochs', 'N/A')}")
     print(f"    Batch Size   : {train_cfg.get('batch_size', 'N/A')}")
+    print(f"    Checkpoint   : {train_cfg.get('checkpoint_dir', 'outputs/checkpoints')}")
+    print(f"    Resume From  : {train_cfg.get('resume_from', None)}")
+    es_cfg = train_cfg.get("early_stopping", {}) or {}
+    if es_cfg.get("enabled", True):
+        print(
+            f"    Early Stop   : monitor={es_cfg.get('monitor', 'val_loss')}, "
+            f"patience={es_cfg.get('patience', 5)}, min_delta={es_cfg.get('min_delta', 0.0)}"
+        )
+    else:
+        print("    Early Stop   : disabled")
     print("-" * 55)
     print("  Experiment Tracker (W&B):")
     print(f"    Entity       : {tracker_cfg.get('entity', 'N/A')}")

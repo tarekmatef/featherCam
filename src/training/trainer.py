@@ -1,3 +1,4 @@
+import copy
 from pathlib import Path
 import tempfile
 from typing import Any, Dict, Optional, Tuple, Union
@@ -12,6 +13,143 @@ try:
     import wandb
 except ImportError:
     wandb = None
+
+
+class EarlyStopping:
+    """
+    Monitor a validation metric and stop training when it stops improving.
+    """
+
+    def __init__(
+        self,
+        patience: int = 5,
+        min_delta: float = 0.0,
+        monitor: str = "val_loss",
+        mode: Optional[str] = None,
+        restore_best_weights: bool = True,
+        best_score: Optional[float] = None,
+        counter: int = 0,
+    ) -> None:
+        self.patience = int(patience)
+        self.min_delta = float(min_delta)
+        self.monitor = str(monitor).strip()
+        if mode is None:
+            self.mode = "max" if "acc" in self.monitor else "min"
+        else:
+            self.mode = str(mode).strip().lower()
+        if self.mode not in ("min", "max"):
+            raise ValueError(f"Unsupported EarlyStopping mode '{self.mode}'. Expected 'min' or 'max'.")
+
+        self.restore_best_weights = bool(restore_best_weights)
+        self.best_score: Optional[float] = best_score
+        self.counter: int = int(counter)
+        self.early_stop: bool = False
+        self.best_state_dict: Optional[Dict[str, Any]] = None
+
+    def is_improvement(self, score: float) -> bool:
+        if self.best_score is None:
+            return True
+        if self.mode == "min":
+            return score < (self.best_score - self.min_delta)
+        return score > (self.best_score + self.min_delta)
+
+    def step(self, score: float, model: Optional[nn.Module] = None) -> bool:
+        """
+        Update early stopping state with `score`.
+        Returns True if `score` is a new best, False otherwise.
+        """
+        if self.is_improvement(score):
+            self.best_score = float(score)
+            self.counter = 0
+            if model is not None and self.restore_best_weights:
+                self.best_state_dict = copy.deepcopy(model.state_dict())
+            return True
+
+        self.counter += 1
+        if self.counter >= self.patience:
+            self.early_stop = True
+        return False
+
+    def state_dict(self) -> Dict[str, Any]:
+        return {
+            "patience": self.patience,
+            "min_delta": self.min_delta,
+            "monitor": self.monitor,
+            "mode": self.mode,
+            "restore_best_weights": self.restore_best_weights,
+            "best_score": self.best_score,
+            "counter": self.counter,
+            "early_stop": self.early_stop,
+            "best_state_dict": self.best_state_dict,
+        }
+
+    def load_state_dict(self, state: Dict[str, Any]) -> None:
+        self.best_score = state.get("best_score", self.best_score)
+        self.counter = int(state.get("counter", self.counter))
+        self.early_stop = bool(state.get("early_stop", False))
+        if "best_state_dict" in state and state["best_state_dict"] is not None:
+            self.best_state_dict = state["best_state_dict"]
+
+
+def save_checkpoint(
+    filepath: Union[str, Path],
+    model: nn.Module,
+    optimizer: Optimizer,
+    epoch: int,
+    history: Dict[str, list],
+    early_stopping: Optional[EarlyStopping] = None,
+    extra_state: Optional[Dict[str, Any]] = None,
+) -> Path:
+    """
+    Atomically save full training state checkpoint to `filepath` for error recovery.
+    """
+    target_path = Path(filepath)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    state: Dict[str, Any] = {
+        "epoch": int(epoch),
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "history": history,
+    }
+    if early_stopping is not None:
+        state["early_stopping"] = early_stopping.state_dict()
+        state["best_score"] = early_stopping.best_score
+    if extra_state:
+        state.update(extra_state)
+
+    tmp_path = target_path.with_suffix(target_path.suffix + ".tmp")
+    torch.save(state, tmp_path)
+    tmp_path.replace(target_path)
+    return target_path
+
+
+def load_checkpoint(
+    filepath: Union[str, Path],
+    model: nn.Module,
+    optimizer: Optional[Optimizer] = None,
+    early_stopping: Optional[EarlyStopping] = None,
+    device: Union[str, torch.device] = "cpu",
+) -> Dict[str, Any]:
+    """
+    Load training state checkpoint from `filepath` into `model`, `optimizer`,
+    and `early_stopping`. Returns the loaded checkpoint dictionary.
+    """
+    ckpt_path = Path(filepath)
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"Checkpoint file not found at '{ckpt_path}'.")
+
+    checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.to(device)
+
+    if optimizer is not None and "optimizer_state_dict" in checkpoint:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+    if early_stopping is not None and "early_stopping" in checkpoint:
+        early_stopping.load_state_dict(checkpoint["early_stopping"])
+
+    return checkpoint
 
 
 def train_one_epoch(
@@ -119,14 +257,55 @@ def train(
 
     model.to(device)
 
+    ckpt_dir_raw = train_cfg.get("checkpoint_dir", cfg.get("checkpoint_dir", "outputs/checkpoints"))
+    checkpoint_dir: Optional[Path] = Path(ckpt_dir_raw) if ckpt_dir_raw else None
+    resume_from = train_cfg.get("resume_from", cfg.get("resume_from", None))
+
+    es_cfg = train_cfg.get("early_stopping", cfg.get("early_stopping", {})) or {}
+    es_enabled = bool(es_cfg.get("enabled", True))
+    early_stopping: Optional[EarlyStopping] = None
+    if es_enabled:
+        early_stopping = EarlyStopping(
+            patience=int(es_cfg.get("patience", 5)),
+            min_delta=float(es_cfg.get("min_delta", 0.0)),
+            monitor=str(es_cfg.get("monitor", "val_loss")),
+            mode=es_cfg.get("mode", None),
+            restore_best_weights=bool(es_cfg.get("restore_best_weights", True)),
+        )
+
     history: Dict[str, list] = {
         "train_loss": [],
         "train_acc": [],
         "val_loss": [],
         "val_acc": [],
     }
+    start_epoch = 1
 
-    for epoch in range(1, epochs + 1):
+    if resume_from:
+        if isinstance(resume_from, bool):
+            if checkpoint_dir is None:
+                raise ValueError("Cannot resume with `resume_from=True` when `checkpoint_dir` is disabled.")
+            resume_path = checkpoint_dir / "latest_checkpoint.pt"
+        else:
+            resume_path = Path(str(resume_from))
+        ckpt = load_checkpoint(
+            filepath=resume_path,
+            model=model,
+            optimizer=opt,
+            early_stopping=early_stopping,
+            device=device,
+        )
+        start_epoch = int(ckpt.get("epoch", 0)) + 1
+        loaded_history = ckpt.get("history")
+        if isinstance(loaded_history, dict):
+            for key in history:
+                if key in loaded_history and isinstance(loaded_history[key], list):
+                    history[key] = list(loaded_history[key])
+        print(f"Resumed training state from '{resume_path}' at epoch {start_epoch}.")
+
+    metrics: Dict[str, Any] = {}
+
+    for epoch in range(start_epoch, epochs + 1):
         train_loss, train_acc = train_one_epoch(
             model=model,
             train_loader=train_loader,
@@ -143,6 +322,7 @@ def train(
             "train/acc": train_acc,
         }
 
+        is_best = False
         if val_loader is not None:
             val_loss, val_acc = validate(
                 model=model,
@@ -159,14 +339,52 @@ def train(
                 f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | "
                 f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}"
             )
+
+            if early_stopping is not None:
+                monitored_value = val_acc if "acc" in early_stopping.monitor else val_loss
+                is_best = early_stopping.step(monitored_value, model=model)
         else:
             print(
                 f"Epoch [{epoch}/{epochs}] "
                 f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f}"
             )
 
+        if checkpoint_dir is not None:
+            save_checkpoint(
+                filepath=checkpoint_dir / "latest_checkpoint.pt",
+                model=model,
+                optimizer=opt,
+                epoch=epoch,
+                history=history,
+                early_stopping=early_stopping,
+            )
+            if is_best:
+                save_checkpoint(
+                    filepath=checkpoint_dir / "best_checkpoint.pt",
+                    model=model,
+                    optimizer=opt,
+                    epoch=epoch,
+                    history=history,
+                    early_stopping=early_stopping,
+                )
+
         if wandb is not None and getattr(wandb, "run", None) is not None:
             wandb.log(metrics, step=epoch)
+
+        if early_stopping is not None and early_stopping.early_stop:
+            print(
+                f"Early stopping triggered at epoch {epoch} "
+                f"(patience={early_stopping.patience}, best {early_stopping.monitor}={early_stopping.best_score:.4f})."
+            )
+            break
+
+    if (
+        early_stopping is not None
+        and early_stopping.restore_best_weights
+        and early_stopping.best_state_dict is not None
+    ):
+        model.load_state_dict(early_stopping.best_state_dict)
+        model.to(device)
 
     if wandb is not None and getattr(wandb, "run", None) is not None:
         model_name = str(cfg.get("model_name", "model")).strip().lower() if isinstance(cfg, (dict, DictConfig)) else "model"

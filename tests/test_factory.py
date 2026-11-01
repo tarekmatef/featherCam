@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from src.data.cub200 import CUB_EXTRACTED_FOLDER, create_dataloaders
 from src.models.factory import ModelFactory
 from src.training.optimizer import OptimizerFactory
-from src.training.trainer import train
+from src.training.trainer import EarlyStopping, load_checkpoint, save_checkpoint, train
 
 def test_mock_model_factory_and_backward():
     
@@ -38,7 +38,7 @@ def test_mock_model_factory_and_backward():
     assert model.fc.weight.grad is None
 
 
-def test_batched_train_and_validate():
+def test_batched_train_and_validate(tmp_path):
     cfg = {
         "model_name": "mock",
         "training": {
@@ -48,6 +48,7 @@ def test_batched_train_and_validate():
             "epochs": 2,
             "batch_size": 4,
             "device": "cpu",
+            "checkpoint_dir": str(tmp_path / "checkpoints"),
         },
     }
 
@@ -107,6 +108,7 @@ def test_cub200_dataloaders_with_train(tmp_path):
             "epochs": 1,
             "batch_size": 2,
             "device": "cpu",
+            "checkpoint_dir": str(tmp_path / "checkpoints"),
         },
     }
 
@@ -132,6 +134,83 @@ def test_cub200_dataloaders_with_train(tmp_path):
     history = train(model=model, opt=optimizer, train_loader=train_loader, val_loader=val_loader, cfg=cfg)
     assert len(history["train_loss"]) == 1
     assert len(history["val_loss"]) == 1
+
+
+def test_checkpoint_recovery_and_early_stopping(tmp_path):
+    ckpt_dir = tmp_path / "checkpoints"
+    train_ds = TensorDataset(torch.randn(8, 3, 32, 32), torch.randint(0, 200, (8,)))
+    val_ds = TensorDataset(torch.randn(4, 3, 32, 32), torch.randint(0, 200, (4,)))
+    train_loader = DataLoader(train_ds, batch_size=4, shuffle=False)
+    val_loader = DataLoader(val_ds, batch_size=4, shuffle=False)
+
+    cfg_initial = {
+        "model_name": "mock",
+        "training": {
+            "optimizer": "adamw",
+            "lr": 1e-2,
+            "weight_decay": 1e-2,
+            "epochs": 2,
+            "batch_size": 4,
+            "device": "cpu",
+            "checkpoint_dir": str(ckpt_dir),
+            "early_stopping": {"enabled": True, "monitor": "val_loss", "patience": 5},
+        },
+    }
+
+    model = ModelFactory.create_model(cfg_initial)
+    optimizer = OptimizerFactory.create_optimizer(model, cfg_initial["training"])
+    history_part1 = train(model=model, opt=optimizer, train_loader=train_loader, val_loader=val_loader, cfg=cfg_initial)
+
+    assert len(history_part1["train_loss"]) == 2
+    assert (ckpt_dir / "latest_checkpoint.pt").exists()
+    assert (ckpt_dir / "best_checkpoint.pt").exists()
+
+    # Resume from latest checkpoint to epoch 4
+    cfg_resume = {
+        "model_name": "mock",
+        "training": {
+            "optimizer": "adamw",
+            "lr": 1e-2,
+            "weight_decay": 1e-2,
+            "epochs": 4,
+            "batch_size": 4,
+            "device": "cpu",
+            "checkpoint_dir": str(ckpt_dir),
+            "resume_from": True,
+            "early_stopping": {"enabled": True, "monitor": "val_loss", "patience": 5},
+        },
+    }
+    resumed_model = ModelFactory.create_model(cfg_resume)
+    resumed_opt = OptimizerFactory.create_optimizer(resumed_model, cfg_resume["training"])
+    history_part2 = train(
+        model=resumed_model,
+        opt=resumed_opt,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        cfg=cfg_resume,
+    )
+    assert len(history_part2["train_loss"]) == 4
+    assert history_part2["train_loss"][:2] == history_part1["train_loss"]
+
+    # Verify early stopping triggers and restores best model weights
+    es = EarlyStopping(patience=2, min_delta=0.0, monitor="val_loss", restore_best_weights=True)
+    m = ModelFactory.create_model(cfg_initial)
+    with torch.no_grad():
+        m.fc.weight.fill_(1.0)
+    assert es.step(1.5, model=m) is True  # Best score = 1.5
+
+    with torch.no_grad():
+        m.fc.weight.fill_(2.0)
+    assert es.step(1.6, model=m) is False
+    assert not es.early_stop
+
+    with torch.no_grad():
+        m.fc.weight.fill_(3.0)
+    assert es.step(1.7, model=m) is False
+    assert es.early_stop
+
+    m.load_state_dict(es.best_state_dict)
+    assert torch.all(m.fc.weight == 1.0)
 
 
 if __name__ == "__main__":
