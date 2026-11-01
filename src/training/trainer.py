@@ -304,6 +304,8 @@ def train(
         print(f"Resumed training state from '{resume_path}' at epoch {start_epoch}.")
 
     metrics: Dict[str, Any] = {}
+    if wandb is not None and getattr(wandb, "run", None) is not None:
+        wandb.watch(model, log="gradients", log_freq=100)
 
     for epoch in range(start_epoch, epochs + 1):
         train_loss, train_acc = train_one_epoch(
