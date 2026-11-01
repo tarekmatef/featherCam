@@ -259,6 +259,7 @@ def train(
 
     ckpt_dir_raw = train_cfg.get("checkpoint_dir", cfg.get("checkpoint_dir", "outputs/checkpoints"))
     checkpoint_dir: Optional[Path] = Path(ckpt_dir_raw) if ckpt_dir_raw else None
+    log_checkpoints_to_wandb = bool(train_cfg.get("log_checkpoints_to_wandb", True))
     resume_from = train_cfg.get("resume_from", cfg.get("resume_from", None))
 
     es_cfg = train_cfg.get("early_stopping", cfg.get("early_stopping", {})) or {}
@@ -352,7 +353,7 @@ def train(
             )
 
         if checkpoint_dir is not None:
-            save_checkpoint(
+            latest_checkpoint = save_checkpoint(
                 filepath=checkpoint_dir / "latest_checkpoint.pt",
                 model=model,
                 optimizer=opt,
@@ -368,6 +369,26 @@ def train(
                     epoch=epoch,
                     history=history,
                     early_stopping=early_stopping,
+                )
+
+            if (
+                log_checkpoints_to_wandb
+                and wandb is not None
+                and getattr(wandb, "run", None) is not None
+            ):
+                model_name = (
+                    str(cfg.get("model_name", "model")).strip().lower()
+                    if isinstance(cfg, (dict, DictConfig))
+                    else "model"
+                )
+                aliases = ["latest"]
+                if is_best:
+                    aliases.append("best")
+                save_checkpoint_to_wandb(
+                    filepath=latest_checkpoint,
+                    artifact_name=f"{model_name}-checkpoints",
+                    aliases=aliases,
+                    metadata={"epoch": epoch, "is_best": is_best, **metrics},
                 )
 
         if wandb is not None and getattr(wandb, "run", None) is not None:
@@ -414,6 +435,31 @@ def save_model_to_wandb(
         logged_artifact = wandb.run.log_artifact(artifact)
         logged_artifact.wait()
         return logged_artifact
+
+
+def save_checkpoint_to_wandb(
+    filepath: Union[str, Path],
+    artifact_name: str = "model-checkpoints",
+    aliases: Optional[list] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+):
+    """Upload a full training checkpoint as a versioned W&B artifact."""
+    if wandb is None or getattr(wandb, "run", None) is None:
+        raise RuntimeError("An active wandb.run is required to log checkpoints to W&B.")
+
+    checkpoint_path = Path(filepath)
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(f"Checkpoint file not found at '{checkpoint_path}'.")
+
+    artifact = wandb.Artifact(
+        name=artifact_name,
+        type="checkpoint",
+        metadata=metadata or {},
+    )
+    artifact.add_file(str(checkpoint_path), name=checkpoint_path.name)
+    logged_artifact = wandb.run.log_artifact(artifact, aliases=aliases or [])
+    logged_artifact.wait()
+    return logged_artifact
 
 
 def load_model_from_wandb(

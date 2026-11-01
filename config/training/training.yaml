@@ -7,6 +7,7 @@ eps: 0.00000001
 epochs: 10
 batch_size: 32
 checkpoint_dir: "outputs/checkpoints"
+log_checkpoints_to_wandb: true # Upload a versioned full-state checkpoint after each epoch
 resume_from: null        # Path to checkpoint file or true to resume from latest_checkpoint.pt
 early_stopping:
   enabled: true
