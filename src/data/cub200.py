@@ -1,5 +1,7 @@
 import argparse
+from collections import defaultdict
 from pathlib import Path
+import random
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from omegaconf import DictConfig
@@ -72,6 +74,46 @@ def download_cub200(
     ) from last_err
 
 
+def stratified_split_samples(
+    samples: List[Tuple[Path, int]],
+    val_ratio: float = 0.2,
+    seed: int = 42,
+) -> Tuple[List[Tuple[Path, int]], List[Tuple[Path, int]]]:
+    """
+    Split `(path, label)` samples into `(train_samples, val_samples)` using
+    deterministic stratified sampling per class.
+    """
+    if not (0.0 < val_ratio < 1.0):
+        raise ValueError(f"val_ratio must be in (0, 1), got {val_ratio}.")
+
+    rng = random.Random(seed)
+    by_class: Dict[int, List[Tuple[Path, int]]] = defaultdict(list)
+    for sample in samples:
+        by_class[sample[1]].append(sample)
+
+    train_samples: List[Tuple[Path, int]] = []
+    val_samples: List[Tuple[Path, int]] = []
+    carry = 0.0
+
+    for label in sorted(by_class.keys()):
+        class_items = list(by_class[label])
+        rng.shuffle(class_items)
+        n = len(class_items)
+        if n <= 1:
+            train_samples.extend(class_items)
+            continue
+
+        exact_val = n * val_ratio + carry
+        n_val = int(round(exact_val))
+        n_val = max(1, min(n - 1, n_val))
+        carry = exact_val - n_val
+
+        val_samples.extend(class_items[:n_val])
+        train_samples.extend(class_items[n_val:])
+
+    return train_samples, val_samples
+
+
 class CUB200Dataset(Dataset):
     """
     PyTorch Dataset for Caltech-UCSD Birds-200-2011 (CUB-200-2011).
@@ -79,7 +121,7 @@ class CUB200Dataset(Dataset):
     Reads official metadata files:
       - images.txt: `<image_id> <rel_path>`
       - image_class_labels.txt: `<image_id> <class_id>` (1..200 -> 0..199)
-      - train_test_split.txt: `<image_id> <is_train>` (1 = train, 0 = validation/test)
+      - train_test_split.txt: `<image_id> <is_train>` (1 = train, 0 = test)
     """
 
     def __init__(
@@ -88,12 +130,17 @@ class CUB200Dataset(Dataset):
         train: bool = True,
         transform: Optional[Callable] = None,
         download: bool = False,
+        samples: Optional[List[Tuple[Path, int]]] = None,
     ) -> None:
         super().__init__()
         self.root = Path(root).expanduser().resolve()
         self.cub_dir = self.root / CUB_EXTRACTED_FOLDER
         self.train = train
         self.transform = transform
+
+        if samples is not None:
+            self.samples: List[Tuple[Path, int]] = list(samples)
+            return
 
         if download:
             download_cub200(self.root)
@@ -104,7 +151,7 @@ class CUB200Dataset(Dataset):
                 "Pass `download=True` or run `python src/data/cub200.py` first."
             )
 
-        self.samples: List[Tuple[Path, int]] = self._load_metadata()
+        self.samples = self._load_metadata()
 
     def _load_metadata(self) -> List[Tuple[Path, int]]:
         images_file = self.cub_dir / "images.txt"
@@ -182,7 +229,8 @@ def create_dataloaders(
     cfg: Union[Dict[str, Any], DictConfig],
 ) -> Tuple[DataLoader, DataLoader]:
     """
-    Create and return `(train_loader, val_loader)` for CUB-200-2011 from config.
+    Create and return `(train_loader, val_loader)` for CUB-200-2011 from config
+    using a stratified split (default 80/20) on the official train split.
     """
     data_cfg = cfg.get("data", {}) if isinstance(cfg, (dict, DictConfig)) else {}
     train_cfg = cfg.get("training", {}) if isinstance(cfg, (dict, DictConfig)) else {}
@@ -191,22 +239,38 @@ def create_dataloaders(
     image_size = int(data_cfg.get("image_size", cfg.get("image_size", 224)))
     num_workers = int(data_cfg.get("num_workers", cfg.get("num_workers", 4)))
     download = bool(data_cfg.get("download", cfg.get("download", True)))
+    val_split = float(data_cfg.get("val_split", cfg.get("val_split", 0.2)))
+    seed = int(data_cfg.get("seed", cfg.get("seed", 42)))
     batch_size = int(train_cfg.get("batch_size", cfg.get("batch_size", 32)))
     pin_memory = torch.cuda.is_available()
 
     train_transform, val_transform = get_cub200_transforms(image_size=image_size)
 
+    full_train_dataset = CUB200Dataset(
+        root=data_dir,
+        train=True,
+        transform=None,
+        download=download,
+    )
+    train_samples, val_samples = stratified_split_samples(
+        full_train_dataset.samples,
+        val_ratio=val_split,
+        seed=seed,
+    )
+
     train_dataset = CUB200Dataset(
         root=data_dir,
         train=True,
         transform=train_transform,
-        download=download,
+        download=False,
+        samples=train_samples,
     )
     val_dataset = CUB200Dataset(
         root=data_dir,
-        train=False,
+        train=True,
         transform=val_transform,
         download=False,
+        samples=val_samples,
     )
 
     train_loader = DataLoader(

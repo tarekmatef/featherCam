@@ -76,12 +76,15 @@ def test_cub200_dataloaders_with_train(tmp_path):
     labels_lines = []
     split_lines = []
 
-    for i in range(1, 7):
+    # 10 train samples across 2 classes (5 per class -> 4 train + 1 val per class = 8 train, 2 val)
+    # and 2 test samples (is_train=0) that must never appear in train or val
+    for i in range(1, 13):
         rel_path = f"001.Black_footed_Albatross/img_{i}.jpg"
-        Image.new("RGB", (64, 64), color=(i * 20, 100, 150)).save(cub_dir / "images" / rel_path)
+        Image.new("RGB", (64, 64), color=(i * 15, 100, 150)).save(cub_dir / "images" / rel_path)
         images_lines.append(f"{i} {rel_path}\n")
-        labels_lines.append(f"{i} {(i % 200) + 1}\n")
-        split_lines.append(f"{i} {1 if i <= 4 else 0}\n")
+        class_id = 1 if i <= 5 else (2 if i <= 10 else 1)
+        labels_lines.append(f"{i} {class_id}\n")
+        split_lines.append(f"{i} {1 if i <= 10 else 0}\n")
 
     (cub_dir / "images.txt").write_text("".join(images_lines), encoding="utf-8")
     (cub_dir / "image_class_labels.txt").write_text("".join(labels_lines), encoding="utf-8")
@@ -94,6 +97,8 @@ def test_cub200_dataloaders_with_train(tmp_path):
             "image_size": 32,
             "num_workers": 0,
             "download": False,
+            "val_split": 0.2,
+            "seed": 42,
         },
         "training": {
             "optimizer": "adamw",
@@ -106,8 +111,21 @@ def test_cub200_dataloaders_with_train(tmp_path):
     }
 
     train_loader, val_loader = create_dataloaders(cfg)
-    assert len(train_loader.dataset) == 4
+    assert len(train_loader.dataset) == 8
     assert len(val_loader.dataset) == 2
+
+    train_labels = [lbl for _, lbl in train_loader.dataset.samples]
+    val_labels = [lbl for _, lbl in val_loader.dataset.samples]
+    assert train_labels.count(0) == 4 and train_labels.count(1) == 4
+    assert val_labels.count(0) == 1 and val_labels.count(1) == 1
+
+    train_paths = {p for p, _ in train_loader.dataset.samples}
+    val_paths = {p for p, _ in val_loader.dataset.samples}
+    assert train_paths.isdisjoint(val_paths)
+    for test_idx in (11, 12):
+        test_path = cub_dir / "images" / f"001.Black_footed_Albatross/img_{test_idx}.jpg"
+        assert test_path not in train_paths
+        assert test_path not in val_paths
 
     model = ModelFactory.create_model(cfg)
     optimizer = OptimizerFactory.create_optimizer(model, cfg["training"])

@@ -41,6 +41,8 @@ def review_config(cfg: DictConfig) -> None:
     print(f"    Image Size   : {data_cfg.get('image_size', 224)}")
     print(f"    Num Workers  : {data_cfg.get('num_workers', 4)}")
     print(f"    Auto-Download: {data_cfg.get('download', True)}")
+    print(f"    Val Split    : {data_cfg.get('val_split', 0.2)}")
+    print(f"    Split Seed   : {data_cfg.get('seed', 42)}")
     print("-" * 55)
     print("  Training Hyperparameters:")
     print(f"    Optimizer    : {train_cfg.get('optimizer', 'N/A')}")

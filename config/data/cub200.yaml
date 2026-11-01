@@ -4,3 +4,5 @@ data_dir: "data"
 image_size: 224
 num_workers: 4
 download: true
+val_split: 0.2
+seed: 42
