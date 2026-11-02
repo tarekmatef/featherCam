@@ -1,7 +1,13 @@
 --extra-index-url https://download.pytorch.org/whl/cpu # NOTE: change to the correct index when using GPU e.g. https://download.pytorch.org/whl/cu132 for cuda 13.2 gpus
 
+datasets
 hydra-core
+matplotlib
+numpy
+Pillow
+pytest
 python-dotenv
+scikit-learn
 torch
 torchvision
 wandb

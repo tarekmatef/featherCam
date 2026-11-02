@@ -1,0 +1,12 @@
+---
+split: "val"                   # Options: "val", "test"
+checkpoint_path: null          # Path to .pt checkpoint (defaults to outputs/checkpoints/best_checkpoint.pt if present)
+wandb_artifact: null           # Optional W&B artifact ref e.g. "feathercam/feathercam-cnn/custom_cnn-weights:latest"
+output_dir: "outputs/evaluation"
+figures_dir: "outputs/figures/evaluation"
+run_gradcam: true
+gradcam_target_layer: null     # Auto-detects last Conv/ReLU activation layer when null
+gradcam_num_correct: 4
+gradcam_num_wrong: 4
+image_path: null               # Required when run_mode=predict (path to a bird image)
+

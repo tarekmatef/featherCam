@@ -1,0 +1,9 @@
+---
+source: "auto"                 # Options: "auto", "huggingface", "local"
+output_dir: "outputs/eda"
+figures_dir: "outputs/figures/eda"
+max_image_scan: null           # Set integer cap for quick smoke test, or null for all images
+save_cleaned_captions: true
+num_sample_images: 8
+num_augmentation_views: 5
+

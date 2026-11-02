@@ -1,8 +1,11 @@
 ---
 dataset: "cub200"
+source: "local"                # Options: "local" (Caltech archive), "huggingface" (Multimodal-Fatima/CUB_train & CUB_test)
 data_dir: "data"
 image_size: 224
+augmentation: "fine_grained"   # Options: "basic", "fine_grained", "strong"
 num_workers: 4
 download: true
 val_split: 0.2
 seed: 42
+return_captions: false

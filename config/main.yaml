@@ -3,9 +3,12 @@ defaults:
   - tracker: wandb # loads config/tracker/wandb.yaml under cfg.tracker
   - training: training
   - data: cub200
+  - eda: eda
+  - evaluation: evaluation
   - _self_
 
 # Global Configuration
-# seed: 42
+seed: 42
+confirm: true
 model_name: custom_cnn
-run_mode: train
+run_mode: train # Options: train, validate, eda, gradcam, predict
