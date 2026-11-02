@@ -291,6 +291,40 @@ def create_dataloaders(
     return train_loader, val_loader
 
 
+def create_test_dataloader(
+    cfg: Union[Dict[str, Any], DictConfig],
+) -> DataLoader:
+    """
+    Create and return `test_loader` for the official CUB-200-2011 test split (`is_train == 0`).
+    """
+    data_cfg = cfg.get("data", {}) if isinstance(cfg, (dict, DictConfig)) else {}
+    train_cfg = cfg.get("training", {}) if isinstance(cfg, (dict, DictConfig)) else {}
+
+    data_dir = data_cfg.get("data_dir", cfg.get("data_dir", "data"))
+    image_size = int(data_cfg.get("image_size", cfg.get("image_size", 224)))
+    num_workers = int(data_cfg.get("num_workers", cfg.get("num_workers", 4)))
+    download = bool(data_cfg.get("download", cfg.get("download", True)))
+    batch_size = int(train_cfg.get("batch_size", cfg.get("batch_size", 32)))
+    pin_memory = torch.cuda.is_available()
+
+    _, test_transform = get_cub200_transforms(image_size=image_size)
+
+    test_dataset = CUB200Dataset(
+        root=data_dir,
+        train=False,
+        transform=test_transform,
+        download=download,
+    )
+
+    return DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Download and extract the CUB-200-2011 dataset."

@@ -12,10 +12,10 @@ _SRC_DIR = Path(__file__).resolve().parent
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
-from data.cub200 import create_dataloaders
+from data.cub200 import create_dataloaders, create_test_dataloader
 from models.factory import ModelFactory
 from training.optimizer import OptimizerFactory
-from training.trainer import train, validate
+from training.trainer import evaluate_on_test, train, validate
 
 
 def review_config(cfg: DictConfig) -> None:
@@ -92,6 +92,17 @@ def feathercam(cfg: DictConfig):
 
     run_mode = str(cfg.get("run_mode", "train")).strip().lower()
     model = ModelFactory.create_model(cfg)
+
+    if run_mode in ("test", "evaluate"):
+        test_loader = create_test_dataloader(cfg)
+        evaluate_on_test(
+            model=model,
+            test_loader=test_loader,
+            cfg=cfg,
+            artifact_name=cfg.get("artifact_name"),
+        )
+        return
+
     train_loader, val_loader = create_dataloaders(cfg)
 
     if run_mode == "train":
@@ -145,7 +156,9 @@ def feathercam(cfg: DictConfig):
         )
         print(f"Validation Loss: {val_loss:.4f} | Validation Acc: {val_acc:.4f}")
     else:
-        raise ValueError(f"Unsupported run_mode: '{run_mode}'. Expected 'train', 'tune', or 'validate'.")
+        raise ValueError(
+            f"Unsupported run_mode: '{run_mode}'. Expected 'train', 'tune', 'validate', or 'test'."
+        )
 
 
 if __name__ == "__main__":

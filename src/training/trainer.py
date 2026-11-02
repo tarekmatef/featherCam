@@ -145,6 +145,10 @@ def load_checkpoint(
 
     if optimizer is not None and "optimizer_state_dict" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        for state in optimizer.state.values():
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.to(device)
 
     if early_stopping is not None and "early_stopping" in checkpoint:
         early_stopping.load_state_dict(checkpoint["early_stopping"])
@@ -301,6 +305,8 @@ def train(
             for key in history:
                 if key in loaded_history and isinstance(loaded_history[key], list):
                     history[key] = list(loaded_history[key])
+        if early_stopping is not None:
+            early_stopping.early_stop = False
         print(f"Resumed training state from '{resume_path}' at epoch {start_epoch}.")
 
     metrics: Dict[str, Any] = {}
@@ -442,5 +448,63 @@ def load_model_from_wandb(
         model.load_state_dict(state_dict)
     model.to(device)
     return model
+
+
+def evaluate_on_test(
+    model: nn.Module,
+    test_loader: DataLoader,
+    cfg: Optional[Union[Dict[str, Any], DictConfig]] = None,
+    artifact_name: Optional[str] = None,
+    criterion: Optional[nn.Module] = None,
+    device: Optional[Union[str, torch.device]] = None,
+) -> Tuple[float, float]:
+    """
+    Load a model by name/artifact from W&B and evaluate it on `test_loader`.
+    Returns `(test_loss, test_acc)`.
+    """
+    cfg = cfg or {}
+    train_cfg = cfg.get("training", cfg) if isinstance(cfg, (dict, DictConfig)) else {}
+    tracker_cfg = cfg.get("tracker", {}) if isinstance(cfg, (dict, DictConfig)) else {}
+
+    if device is None:
+        default_device = "cuda" if torch.cuda.is_available() else "cpu"
+        device_str = train_cfg.get("device", cfg.get("device", default_device))
+        device = torch.device(device_str)
+    else:
+        device = torch.device(device)
+
+    if criterion is None:
+        criterion = nn.CrossEntropyLoss()
+
+    if artifact_name is None:
+        artifact_name = cfg.get("artifact_name") if isinstance(cfg, (dict, DictConfig)) else None
+
+    if not artifact_name:
+        model_name = str(cfg.get("model_name", "custom_cnn")).strip().lower() if isinstance(cfg, (dict, DictConfig)) else "custom_cnn"
+        artifact_name = f"{model_name}-weights:latest"
+    else:
+        artifact_name = str(artifact_name).strip()
+        if ":" not in artifact_name:
+            if not artifact_name.endswith("-weights") and "/" not in artifact_name:
+                artifact_name = f"{artifact_name}-weights:latest"
+            else:
+                artifact_name = f"{artifact_name}:latest"
+
+    if "/" not in artifact_name:
+        entity = tracker_cfg.get("entity", "feathercam")
+        project = tracker_cfg.get("project", "feathercam-cnn")
+        artifact_ref = f"{entity}/{project}/{artifact_name}"
+    else:
+        artifact_ref = artifact_name
+
+    load_model_from_wandb(model=model, artifact_ref=artifact_ref, device=device)
+    test_loss, test_acc = validate(
+        model=model,
+        val_loader=test_loader,
+        criterion=criterion,
+        device=device,
+    )
+    print(f"Test Evaluation ({artifact_ref}) -> Test Loss: {test_loss:.4f} | Test Acc: {test_acc:.4f}")
+    return test_loss, test_acc
 
 

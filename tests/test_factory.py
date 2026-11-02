@@ -3,10 +3,10 @@ from PIL import Image
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
-from src.data.cub200 import CUB_EXTRACTED_FOLDER, create_dataloaders
+from src.data.cub200 import CUB_EXTRACTED_FOLDER, create_dataloaders, create_test_dataloader
 from src.models.factory import ModelFactory
 from src.training.optimizer import OptimizerFactory
-from src.training.trainer import EarlyStopping, load_checkpoint, save_checkpoint, train
+from src.training.trainer import EarlyStopping, evaluate_on_test, load_checkpoint, save_checkpoint, train
 
 def test_mock_model_factory_and_backward():
     
@@ -113,8 +113,10 @@ def test_cub200_dataloaders_with_train(tmp_path):
     }
 
     train_loader, val_loader = create_dataloaders(cfg)
+    test_loader = create_test_dataloader(cfg)
     assert len(train_loader.dataset) == 8
     assert len(val_loader.dataset) == 2
+    assert len(test_loader.dataset) == 2
 
     train_labels = [lbl for _, lbl in train_loader.dataset.samples]
     val_labels = [lbl for _, lbl in val_loader.dataset.samples]
@@ -123,11 +125,15 @@ def test_cub200_dataloaders_with_train(tmp_path):
 
     train_paths = {p for p, _ in train_loader.dataset.samples}
     val_paths = {p for p, _ in val_loader.dataset.samples}
+    test_paths = {p for p, _ in test_loader.dataset.samples}
     assert train_paths.isdisjoint(val_paths)
+    assert train_paths.isdisjoint(test_paths)
+    assert val_paths.isdisjoint(test_paths)
     for test_idx in (11, 12):
         test_path = cub_dir / "images" / f"001.Black_footed_Albatross/img_{test_idx}.jpg"
         assert test_path not in train_paths
         assert test_path not in val_paths
+        assert test_path in test_paths
 
     model = ModelFactory.create_model(cfg)
     optimizer = OptimizerFactory.create_optimizer(model, cfg["training"])
@@ -211,6 +217,40 @@ def test_checkpoint_recovery_and_early_stopping(tmp_path):
 
     m.load_state_dict(es.best_state_dict)
     assert torch.all(m.fc.weight == 1.0)
+
+
+def test_evaluate_on_test_loads_wandb_model_by_name(monkeypatch):
+    captured = {}
+
+    def _fake_load_model_from_wandb(model, artifact_ref, filename="model_weights.pt", device="cpu"):
+        captured["artifact_ref"] = artifact_ref
+        with torch.no_grad():
+            model.fc.weight.fill_(0.0)
+            model.fc.bias.fill_(0.0)
+            model.fc.bias[7] = 10.0
+        model.to(device)
+        return model
+
+    monkeypatch.setattr("src.training.trainer.load_model_from_wandb", _fake_load_model_from_wandb)
+
+    cfg = {
+        "model_name": "mock",
+        "tracker": {"entity": "feathercam", "project": "feathercam-cnn"},
+        "training": {"device": "cpu"},
+    }
+    model = ModelFactory.create_model(cfg)
+    test_ds = TensorDataset(torch.randn(4, 3, 32, 32), torch.full((4,), 7, dtype=torch.long))
+    test_loader = DataLoader(test_ds, batch_size=2, shuffle=False)
+
+    test_loss, test_acc = evaluate_on_test(
+        model=model,
+        test_loader=test_loader,
+        cfg=cfg,
+        artifact_name="mock-weights",
+    )
+    assert captured["artifact_ref"] == "feathercam/feathercam-cnn/mock-weights:latest"
+    assert test_acc == 1.0
+    assert test_loss >= 0.0
 
 
 if __name__ == "__main__":
