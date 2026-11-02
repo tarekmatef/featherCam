@@ -476,35 +476,44 @@ def evaluate_on_test(
     if criterion is None:
         criterion = nn.CrossEntropyLoss()
 
-    if artifact_name is None:
-        artifact_name = cfg.get("artifact_name") if isinstance(cfg, (dict, DictConfig)) else None
-
-    if not artifact_name:
-        model_name = str(cfg.get("model_name", "custom_cnn")).strip().lower() if isinstance(cfg, (dict, DictConfig)) else "custom_cnn"
-        artifact_name = f"{model_name}-weights:latest"
+    resume_from = train_cfg.get("resume_from", cfg.get("resume_from", None)) if isinstance(cfg, (dict, DictConfig)) else None
+    if resume_from:
+        ckpt_dir = Path(train_cfg.get("checkpoint_dir", "outputs/checkpoints"))
+        ckpt_path = (ckpt_dir / "best_checkpoint.pt") if isinstance(resume_from, bool) else Path(str(resume_from))
+        load_checkpoint(filepath=ckpt_path, model=model, device=device)
+        source_label = str(ckpt_path)
     else:
-        artifact_name = str(artifact_name).strip()
-        if ":" not in artifact_name:
-            if not artifact_name.endswith("-weights") and "/" not in artifact_name:
-                artifact_name = f"{artifact_name}-weights:latest"
-            else:
-                artifact_name = f"{artifact_name}:latest"
+        if artifact_name is None:
+            artifact_name = cfg.get("artifact_name") if isinstance(cfg, (dict, DictConfig)) else None
 
-    if "/" not in artifact_name:
-        entity = tracker_cfg.get("entity", "feathercam")
-        project = tracker_cfg.get("project", "feathercam-cnn")
-        artifact_ref = f"{entity}/{project}/{artifact_name}"
-    else:
-        artifact_ref = artifact_name
+        if not artifact_name:
+            model_name = str(cfg.get("model_name", "custom_cnn")).strip().lower() if isinstance(cfg, (dict, DictConfig)) else "custom_cnn"
+            artifact_name = f"{model_name}-weights:latest"
+        else:
+            artifact_name = str(artifact_name).strip()
+            if ":" not in artifact_name:
+                if not artifact_name.endswith("-weights") and "/" not in artifact_name:
+                    artifact_name = f"{artifact_name}-weights:latest"
+                else:
+                    artifact_name = f"{artifact_name}:latest"
 
-    load_model_from_wandb(model=model, artifact_ref=artifact_ref, device=device)
+        if "/" not in artifact_name:
+            entity = tracker_cfg.get("entity", "feathercam")
+            project = tracker_cfg.get("project", "feathercam-cnn")
+            artifact_ref = f"{entity}/{project}/{artifact_name}"
+        else:
+            artifact_ref = artifact_name
+
+        load_model_from_wandb(model=model, artifact_ref=artifact_ref, device=device)
+        source_label = artifact_ref
+
     test_loss, test_acc = validate(
         model=model,
         val_loader=test_loader,
         criterion=criterion,
         device=device,
     )
-    print(f"Test Evaluation ({artifact_ref}) -> Test Loss: {test_loss:.4f} | Test Acc: {test_acc:.4f}")
+    print(f"Test Evaluation ({source_label}) -> Test Loss: {test_loss:.4f} | Test Acc: {test_acc:.4f}")
     return test_loss, test_acc
 
 
