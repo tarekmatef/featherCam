@@ -1,7 +1,9 @@
 from omegaconf import DictConfig
+import timm
 from torch import nn
 from typing import Union, Any, Dict
-from .customcnn import FeatherCam, MockFeatherCam
+from .customcnn import FeatherCam, MockFeatherCam, FeatherNext
+
 
 class ModelFactory:
     """
@@ -9,7 +11,12 @@ class ModelFactory:
     """
 
     _MODELS = {
-        "custom_cnn": FeatherCam,
+        "custom_cnn": FeatherNext,
+        "convnext": lambda: timm.create_model(
+            "convnext_base.fb_in22k_ft_in1k_384",
+            pretrained=True,
+            num_classes=200,
+        ),
         "mock": MockFeatherCam,
     }
 

@@ -32,10 +32,23 @@ class OptimizerFactory:
 
         opt_name = str(cfg.get('optimizer', "none")).strip().lower()
         lr = float(cfg.get("lr", 1e-3))
+        backbone_lr = float(cfg.get("backbone_lr", 1e-5))
         weight_decay = float(cfg.get("weight_decay", 1e-2))
 
-        # Filter parameters that require gradients
-        params = [p for p in model.parameters() if p.requires_grad]
+        head_params, backbone_params = [], []
+        for name, param in model.named_parameters():
+            if not param.requires_grad:
+                continue
+            if name.startswith(("head.", "fc.", "classifier.")):
+                head_params.append(param)
+            else:
+                backbone_params.append(param)
+
+        params = []
+        if backbone_params:
+            params.append({"params": backbone_params, "lr": backbone_lr})
+        if head_params:
+            params.append({"params": head_params, "lr": lr})
 
         if opt_name not in cls._OPTIMIZERS:
             raise ValueError(

@@ -2,6 +2,7 @@
 
 hydra-core
 python-dotenv
+timm
 torch
 torchvision
 wandb
