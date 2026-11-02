@@ -207,11 +207,22 @@ def get_cub200_transforms(
     resize_dim = int(image_size * 256 / 224)
     train_transform = transforms.Compose(
         [
-            transforms.Resize((resize_dim, resize_dim)),
-            transforms.RandomCrop((image_size, image_size)),
-            transforms.RandomHorizontalFlip(),
+            transforms.RandomResizedCrop(
+                (image_size, image_size),
+                scale=(0.6, 1.0),
+                ratio=(0.8, 1.25),
+            ),
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.RandomRotation(degrees=15),
+            transforms.ColorJitter(
+                brightness=0.2,
+                contrast=0.2,
+                saturation=0.2,
+                hue=0.05,
+            ),
             transforms.ToTensor(),
             transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+            transforms.RandomErasing(p=0.2, scale=(0.02, 0.15)),
         ]
     )
     val_transform = transforms.Compose(
