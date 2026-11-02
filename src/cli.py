@@ -112,6 +112,27 @@ def feathercam(cfg: DictConfig):
             )
         finally:
             wandb.finish()
+    elif run_mode in ("tune", "sweep"):
+        sweep_cfg = {
+            "method": "bayes",
+            "metric": {"name": "val/loss", "goal": "minimize"},
+            "parameters": {
+                "lr": {"distribution": "log_uniform_values", "min": 1e-5, "max": 1e-2},
+                "weight_decay": {"distribution": "log_uniform_values", "min": 1e-5, "max": 1e-1},
+            },
+        }
+        entity = cfg.tracker.get("entity")
+        project = cfg.tracker.get("project")
+        sweep_id = wandb.sweep(sweep=sweep_cfg, entity=entity, project=project)
+
+        def _sweep_trial() -> None:
+            with wandb.init():
+                trial_model = ModelFactory.create_model(cfg)
+                trial_train_cfg = {**cfg.training, "lr": wandb.config.lr, "weight_decay": wandb.config.weight_decay}
+                opt = OptimizerFactory.create_optimizer(model=trial_model, cfg=trial_train_cfg)
+                train(model=trial_model, opt=opt, train_loader=train_loader, val_loader=val_loader, cfg=cfg)
+
+        wandb.agent(sweep_id, function=_sweep_trial, entity=entity, project=project, count=int(cfg.training.get("sweep_count", 10)))
     elif run_mode in ("val", "validate", "eval"):
         default_device = "cuda" if torch.cuda.is_available() else "cpu"
         device = torch.device(cfg.training.get("device", default_device))
@@ -124,7 +145,7 @@ def feathercam(cfg: DictConfig):
         )
         print(f"Validation Loss: {val_loss:.4f} | Validation Acc: {val_acc:.4f}")
     else:
-        raise ValueError(f"Unsupported run_mode: '{run_mode}'. Expected 'train' or 'validate'.")
+        raise ValueError(f"Unsupported run_mode: '{run_mode}'. Expected 'train', 'tune', or 'validate'.")
 
 
 if __name__ == "__main__":

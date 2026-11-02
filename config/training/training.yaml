@@ -14,3 +14,4 @@ early_stopping:
   patience: 5
   min_delta: 0.0
   restore_best_weights: true
+sweep_count: 10
