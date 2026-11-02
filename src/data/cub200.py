@@ -122,6 +122,7 @@ class CUB200Dataset(Dataset):
       - images.txt: `<image_id> <rel_path>`
       - image_class_labels.txt: `<image_id> <class_id>` (1..200 -> 0..199)
       - train_test_split.txt: `<image_id> <is_train>` (1 = train, 0 = test)
+      - bounding_boxes.txt: `<image_id> <x> <y> <width> <height>` (optional)
     """
 
     def __init__(
@@ -131,15 +132,21 @@ class CUB200Dataset(Dataset):
         transform: Optional[Callable] = None,
         download: bool = False,
         samples: Optional[List[Tuple[Path, int]]] = None,
+        bboxes: Optional[Dict[Path, Tuple[float, float, float, float]]] = None,
+        crop_bbox: bool = False,
     ) -> None:
         super().__init__()
         self.root = Path(root).expanduser().resolve()
         self.cub_dir = self.root / CUB_EXTRACTED_FOLDER
         self.train = train
         self.transform = transform
+        self.crop_bbox = bool(crop_bbox)
+        self.bboxes: Dict[Path, Tuple[float, float, float, float]] = dict(bboxes) if bboxes else {}
 
         if samples is not None:
             self.samples: List[Tuple[Path, int]] = list(samples)
+            if self.crop_bbox and not self.bboxes:
+                self.bboxes = self._load_bboxes()
             return
 
         if download:
@@ -152,6 +159,36 @@ class CUB200Dataset(Dataset):
             )
 
         self.samples = self._load_metadata()
+        self.bboxes = self._load_bboxes()
+
+    def _load_bboxes(self) -> Dict[Path, Tuple[float, float, float, float]]:
+        images_file = self.cub_dir / "images.txt"
+        bboxes_file = self.cub_dir / "bounding_boxes.txt"
+        if not images_file.exists() or not bboxes_file.exists():
+            return {}
+
+        img_paths: Dict[int, str] = {}
+        with open(images_file, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) == 2:
+                    img_paths[int(parts[0])] = parts[1]
+
+        bboxes: Dict[Path, Tuple[float, float, float, float]] = {}
+        with open(bboxes_file, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) == 5:
+                    img_id = int(parts[0])
+                    if img_id in img_paths:
+                        full_path = self.cub_dir / "images" / img_paths[img_id]
+                        bboxes[full_path] = (
+                            float(parts[1]),
+                            float(parts[2]),
+                            float(parts[3]),
+                            float(parts[4]),
+                        )
+        return bboxes
 
     def _load_metadata(self) -> List[Tuple[Path, int]]:
         images_file = self.cub_dir / "images.txt"
@@ -193,6 +230,16 @@ class CUB200Dataset(Dataset):
         img_path, label = self.samples[index]
         with Image.open(img_path) as img:
             image = img.convert("RGB")
+
+        if self.crop_bbox and img_path in self.bboxes:
+            x, y, w, h = self.bboxes[img_path]
+            img_w, img_h = image.size
+            left = max(0, int(round(x)))
+            top = max(0, int(round(y)))
+            right = min(img_w, int(round(x + w)))
+            bottom = min(img_h, int(round(y + h)))
+            if right > left and bottom > top:
+                image = image.crop((left, top, right, bottom))
 
         if self.transform is not None:
             image = self.transform(image)
@@ -275,6 +322,8 @@ def create_dataloaders(
         transform=train_transform,
         download=False,
         samples=train_samples,
+        bboxes=full_train_dataset.bboxes,
+        crop_bbox=True,
     )
     val_dataset = CUB200Dataset(
         root=data_dir,
@@ -282,6 +331,8 @@ def create_dataloaders(
         transform=val_transform,
         download=False,
         samples=val_samples,
+        bboxes=full_train_dataset.bboxes,
+        crop_bbox=False,
     )
 
     train_loader = DataLoader(

@@ -76,6 +76,7 @@ def test_cub200_dataloaders_with_train(tmp_path):
     images_lines = []
     labels_lines = []
     split_lines = []
+    bbox_lines = []
 
     # 10 train samples across 2 classes (5 per class -> 4 train + 1 val per class = 8 train, 2 val)
     # and 2 test samples (is_train=0) that must never appear in train or val
@@ -86,10 +87,12 @@ def test_cub200_dataloaders_with_train(tmp_path):
         class_id = 1 if i <= 5 else (2 if i <= 10 else 1)
         labels_lines.append(f"{i} {class_id}\n")
         split_lines.append(f"{i} {1 if i <= 10 else 0}\n")
+        bbox_lines.append(f"{i} 8.0 10.0 40.0 42.0\n")
 
     (cub_dir / "images.txt").write_text("".join(images_lines), encoding="utf-8")
     (cub_dir / "image_class_labels.txt").write_text("".join(labels_lines), encoding="utf-8")
     (cub_dir / "train_test_split.txt").write_text("".join(split_lines), encoding="utf-8")
+    (cub_dir / "bounding_boxes.txt").write_text("".join(bbox_lines), encoding="utf-8")
 
     cfg = {
         "model_name": "mock",
@@ -117,6 +120,9 @@ def test_cub200_dataloaders_with_train(tmp_path):
     assert len(train_loader.dataset) == 8
     assert len(val_loader.dataset) == 2
     assert len(test_loader.dataset) == 2
+    assert train_loader.dataset.crop_bbox is True
+    assert val_loader.dataset.crop_bbox is False
+    assert len(train_loader.dataset.bboxes) == 12
 
     train_labels = [lbl for _, lbl in train_loader.dataset.samples]
     val_labels = [lbl for _, lbl in val_loader.dataset.samples]
